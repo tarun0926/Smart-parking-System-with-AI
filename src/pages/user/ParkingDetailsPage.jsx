@@ -73,11 +73,14 @@ export const ParkingDetailsPage = () => {
 
   useEffect(() => {
     fetchParkingData();
-    // Pre-fill vehicle number from authenticated user profile
-    if (user?.vehicle) {
+  }, [id]);
+
+  // Pre-fill vehicle number from authenticated user profile (separate effect to avoid re-fetch loop)
+  useEffect(() => {
+    if (user?.vehicle && !vehicleNumber) {
       setVehicleNumber(user.vehicle);
     }
-  }, [id, user]);
+  }, [user?.vehicle]);
 
   if (loading || (!parking && !notFound)) {
     return (

@@ -1,8 +1,7 @@
-# Smart-parking-System-with-AI
 # 🚗 SmartPark AI – Intelligent Smart Parking Management & AI Prediction System
 
 > **College Major Project / Final Year Engineering Demonstration**  
-> **Full Stack Architecture**: React.js 19 + Node.js Express + MongoDB + Python FastAPI Machine Learnin
+> **Full Stack Architecture**: React.js 19 + Node.js Express + MongoDB + Python FastAPI Machine Learning
 
 ---
 

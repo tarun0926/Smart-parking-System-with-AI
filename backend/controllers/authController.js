@@ -57,12 +57,6 @@ const waitForDB = (timeoutMs = 30000) => {
 // @desc    Register a new user
 // @route   POST /api/auth/register
 // @access  Public
-// NOTE: Fallback to in‑memory store when MongoDB is unavailable (e.g., during sandbox execution).
-// Simple in‑memory mock store for environments without MongoDB
-if (!global.mockUsers) {
-  global.mockUsers = [];
-}
-
 export const registerUser = async (req, res) => {
   try {
     const { name, email, password, role, phone, vehicle } = req.body;

@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { BookingAPI } from '../../services/api';
-import { mockBookings } from '../../data/mockData';
 import StatusBadge from '../../components/common/StatusBadge';
 import EmptyState from '../../components/common/EmptyState';
 import {

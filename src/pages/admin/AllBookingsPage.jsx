@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { BookingAPI } from '../../services/api';
-import { mockBookings } from '../../data/mockData';
 import StatusBadge from '../../components/common/StatusBadge';
 import {
   ClipboardList,
@@ -53,21 +52,22 @@ export const AllBookingsPage = () => {
   };
 
   const handleCancelBooking = async (b) => {
-    if (!window.confirm(`Cancel reservation #${b.id}? Slot will be released back to parking pool.`)) return;
+    const bookingId = b._id || b.id;
+    if (!window.confirm(`Cancel reservation #${bookingId}? Slot will be released back to parking pool.`)) return;
     try {
-      await BookingAPI.cancel(b.id);
+      await BookingAPI.cancel(bookingId);
       setBookings((prev) =>
-        prev.map((item) => (item.id === b.id ? { ...item, status: 'Cancelled' } : item))
+        prev.map((item) => ((item._id || item.id) === bookingId ? { ...item, status: 'Cancelled' } : item))
       );
-      if (selectedBooking && selectedBooking.id === b.id) {
+      if (selectedBooking && (selectedBooking._id || selectedBooking.id) === bookingId) {
         setSelectedBooking((prev) => ({ ...prev, status: 'Cancelled' }));
       }
-      notify(`Booking #${b.id} has been cancelled.`);
+      notify(`Booking #${bookingId} has been cancelled.`);
     } catch (err) {
       setBookings((prev) =>
-        prev.map((item) => (item.id === b.id ? { ...item, status: 'Cancelled' } : item))
+        prev.map((item) => ((item._id || item.id) === bookingId ? { ...item, status: 'Cancelled' } : item))
       );
-      notify(`Booking #${b.id} cancelled (Local store).`);
+      notify(`Booking #${bookingId} cancelled (Local store).`);
     }
   };
 

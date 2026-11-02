@@ -7,14 +7,15 @@ import {
   deleteUser,
 } from '../controllers/userController.js';
 import protect from '../middleware/authMiddleware.js';
+import { authorizeRoles } from '../middleware/roleMiddleware.js';
 
 const router = express.Router();
 
 router.get('/profile', protect, getUserProfile);
 router.put('/profile', protect, updateUserProfile);
-router.get('/', protect, getAllUsers);
-router.put('/:id/status', protect, updateUserStatus);
-router.delete('/:id', protect, deleteUser);
+router.get('/', protect, authorizeRoles('admin'), getAllUsers);
+router.put('/:id/status', protect, authorizeRoles('admin'), updateUserStatus);
+router.delete('/:id', protect, authorizeRoles('admin'), deleteUser);
 
 export default router;
 

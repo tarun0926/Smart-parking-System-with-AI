@@ -102,7 +102,7 @@ export const ManageSlotsPage = () => {
 
     // Optimistic UI update
     setSlots((prev) =>
-      prev.map((s) => (s.id === slotId || s.number === slotId ? { ...s, status: nextStatus } : s))
+      prev.map((s) => (s.id === slotId || s.number === slotId || s._id === slotId ? { ...s, status: nextStatus } : s))
     );
 
     try {

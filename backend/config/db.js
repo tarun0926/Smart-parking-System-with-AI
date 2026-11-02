@@ -221,13 +221,29 @@ export const connectDB = async () => {
     console.warn('[Database] Local MongoDB not found. Starting MongoMemoryServer (in-memory)...');
   }
 
-  // Fallback: use simple in‑memory mock store when no MongoDB is reachable.
-  console.warn('[Database] No MongoDB available – initializing in‑memory mock store.');
-  global.useMockDB = true;
-  global.mockUsers = []; // simple array to hold user records
-  console.log('[Database] ✅ Mock store initialized.');
-  // No seeding needed for mock store.
-  return true;
+  // Fallback to MongoMemoryServer (bundled binary, no install needed)
+  try {
+    const { MongoMemoryServer } = await import('mongodb-memory-server');
+
+    console.log('[Database] Downloading/starting MongoMemoryServer binary (first run may take 30-60 seconds)...');
+    mongoMemoryServer = await MongoMemoryServer.create({
+      instance: {
+        dbName: 'smartpark_ai',
+      },
+    });
+
+    const uri = mongoMemoryServer.getUri();
+    const conn = await mongoose.connect(uri);
+    console.log(`[Database] ✅ MongoMemoryServer connected: ${conn.connection.host}`);
+    console.log('[Database]    (Data is in-memory; resets on server restart)');
+
+    await autoSeedIfEmpty();
+    return true;
+  } catch (mmsErr) {
+    console.error('[Database] ❌ Failed to start MongoMemoryServer:', mmsErr.message);
+    console.error('[Database]    Register/Login will NOT work until a MongoDB connection is established.');
+    return false;
+  }
 };
 
 export default connectDB;

@@ -7,7 +7,7 @@ import SmartRecommendationCard from '../../components/parking/SmartRecommendatio
 import { getSmartRecommendations } from '../../utils/recommendationEngine';
 import StatusBadge from '../../components/common/StatusBadge';
 import { ParkingAPI, BookingAPI } from '../../services/api';
-import { mockParkingLocations, mockBookings } from '../../data/mockData';
+import { mockParkingLocations } from '../../data/mockData';
 import { MapPin, Grid, BookmarkCheck, Clock, Navigation } from 'lucide-react';
 import { Link } from 'react-router-dom';
 

@@ -37,14 +37,14 @@ export const MyParkingPage = () => {
     try {
       setLoading(true);
       const res = await ParkingAPI.getAll();
-      if (Array.isArray(res.data)) {
+      if (Array.isArray(res.data) && res.data.length > 0) {
         setLocations(res.data);
       } else {
-        setLocations([]);
+        setLocations(mockParkingLocations);
       }
     } catch (err) {
       console.warn('[MyParkingPage] Error fetching locations:', err.message);
-      setLocations([]);
+      setLocations(mockParkingLocations);
     } finally {
       setLoading(false);
     }
@@ -112,16 +112,17 @@ export const MyParkingPage = () => {
     e.preventDefault();
     if (!editingLoc) return;
 
+    const locId = editingLoc._id || editingLoc.id;
     try {
-      await ParkingAPI.update(editingLoc.id, editingLoc);
+      await ParkingAPI.update(locId, editingLoc);
       setLocations((prev) =>
-        prev.map((loc) => (loc.id === editingLoc.id ? editingLoc : loc))
+        prev.map((loc) => ((loc._id || loc.id) === locId ? editingLoc : loc))
       );
       setEditingLoc(null);
       notify(`Facility "${editingLoc.name}" updated!`);
     } catch (err) {
       setLocations((prev) =>
-        prev.map((loc) => (loc.id === editingLoc.id ? editingLoc : loc))
+        prev.map((loc) => ((loc._id || loc.id) === locId ? editingLoc : loc))
       );
       setEditingLoc(null);
       notify(`Facility "${editingLoc.name}" updated (Local)`);
@@ -130,12 +131,13 @@ export const MyParkingPage = () => {
 
   const handleDelete = async (loc) => {
     if (!window.confirm(`Delete facility "${loc.name}"? All slot bays will be removed.`)) return;
+    const locId = loc._id || loc.id;
     try {
-      await ParkingAPI.delete(loc.id);
-      setLocations((prev) => prev.filter((p) => p.id !== loc.id));
+      await ParkingAPI.delete(locId);
+      setLocations((prev) => prev.filter((p) => (p._id || p.id) !== locId));
       notify(`Facility "${loc.name}" removed.`);
     } catch (err) {
-      setLocations((prev) => prev.filter((p) => p.id !== loc.id));
+      setLocations((prev) => prev.filter((p) => (p._id || p.id) !== locId));
       notify(`Facility "${loc.name}" removed (Local).`);
     }
   };
@@ -190,14 +192,14 @@ export const MyParkingPage = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {locations.map((p) => (
           <div
-            key={p.id}
+            key={p._id || p.id}
             className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4 hover:border-slate-700 transition-all flex flex-col justify-between"
           >
             <div className="space-y-4">
               <div className="flex items-start justify-between">
                 <div>
                   <span className="text-[10px] uppercase font-bold text-emerald-400 font-mono">
-                    Facility ID: {p.id}
+                    Facility ID: {p._id || p.id}
                   </span>
                   <h3 className="text-lg font-bold text-white mt-0.5">{p.name}</h3>
                   <p className="text-xs text-slate-400 flex items-center gap-1 mt-1">
@@ -242,7 +244,7 @@ export const MyParkingPage = () => {
             {/* Bottom Actions */}
             <div className="pt-3 flex items-center justify-between gap-2 border-t border-slate-800">
               <Link
-                to={`/owner/slots?location=${p.id}`}
+                to={`/owner/slots?location=${p._id || p.id}`}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
               >
                 <Grid className="w-3.5 h-3.5 text-emerald-400" />
