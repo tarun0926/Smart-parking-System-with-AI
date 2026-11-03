@@ -7,8 +7,7 @@ export default defineConfig({
 
   // ── Development server ────────────────────────────────────────────────────
   server: {
-    port: 5173,
-    host: true,
+    port: 3000,
     proxy: {
       // In dev: proxy /api requests to the local Express backend
       '/api': {

@@ -25,6 +25,12 @@
   background: #475569;
 }
 
+/* ── Leaflet OSM dark-mode filter ─────────────────────────── */
+/* Applies to the 🌙 Dark layer only (className: map-dark-tiles) */
+.map-dark-tiles {
+  filter: invert(100%) hue-rotate(180deg) brightness(90%) contrast(90%) saturate(0.8);
+}
+
 /* ── Leaflet dark popup overrides ─────────────────────────── */
 .leaflet-popup-content-wrapper {
   background: transparent !important;

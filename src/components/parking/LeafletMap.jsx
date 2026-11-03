@@ -195,21 +195,17 @@ export const LeafletMap = ({
 
     L.control.zoom({ position: 'topright' }).addTo(map);
 
-    // CartoDB Dark Matter tile layer (100% Free, No API Key required, fast CDN)
-    const darkTile = L.tileLayer(
-      'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-      {
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 20,
-      }
-    );
-
-    // Standard OSM (fallback / alternative)
+    // OpenStreetMap tiles — completely free, no API key ever needed
     const osmTile = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19,
+    });
+
+    // Dark-mode version: same OSM tiles with CSS invert filter (no API key needed)
+    const darkTile = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+      className: 'map-dark-tiles',   // targeted by CSS filter in index.css
     });
 
     darkTile.addTo(map);
