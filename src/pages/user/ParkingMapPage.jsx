@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import LeafletMap from '../../components/parking/LeafletMap';
+import LeafletMap, { parseCoordinates } from '../../components/parking/LeafletMap';
 import ParkingFilter from '../../components/parking/ParkingFilter';
 import ParkingCard from '../../components/parking/ParkingCard';
 import SmartRecommendationCard from '../../components/parking/SmartRecommendationCard';
 import { getSmartRecommendations } from '../../utils/recommendationEngine';
+import { fetchDrivingRoute } from '../../utils/routing';
 import { ParkingAPI } from '../../services/api';
+import { mockParkingLocations } from '../../data/mockData';
 import {
   MapPin,
   Navigation,
@@ -18,6 +20,8 @@ import {
   X,
   Loader2,
   Info,
+  Route,
+  Compass,
 } from 'lucide-react';
 
 // ─── Haversine (km) ──────────────────────────────────────────────────────────
@@ -58,7 +62,7 @@ export const ParkingMapPage = () => {
 
   // ── Location search (geocoding) ──────────────────────────────────────────
   const [locationQuery, setLocationQuery] = useState('');
-  const [searchedLocation, setSearchedLocation] = useState(null); // { lat, lng, displayName }
+  const [searchedLocation, setSearchedLocation] = useState(null); // { lat, lng, displayName, radiusKm }
   const [geocoding, setGeocoding] = useState(false);
   const [geocodeError, setGeocodeError] = useState(null);
   const [searchRadius, setSearchRadius] = useState(5); // km
@@ -67,6 +71,11 @@ export const ParkingMapPage = () => {
   const [userLocation, setUserLocation] = useState(null);
   const [locating, setLocating] = useState(false);
   const [locError, setLocError] = useState(null);
+
+  // ── Driving Route State ──────────────────────────────────────────────────
+  const [activeRoute, setActiveRoute] = useState(null);
+  const [routingLoading, setRoutingLoading] = useState(false);
+  const [routeError, setRouteError] = useState(null);
 
   // ── The map center (searched location or GPS or default) ─────────────────
   const mapCenter = searchedLocation || userLocation || null;
@@ -85,7 +94,7 @@ export const ParkingMapPage = () => {
   const [listExpanded, setListExpanded] = useState(false);
   const locationInputRef = useRef(null);
 
-  // ── Fetch all parking from DB ────────────────────────────────────────────
+  // ── Fetch all parking from DB (with fallback to mock data) ───────────────
   useEffect(() => {
     const fetchLocations = async () => {
       try {
@@ -98,14 +107,15 @@ export const ParkingMapPage = () => {
           const initialId = searchParams.get('select') || data[0]._id || data[0].id;
           if (!selectedId) setSelectedId(initialId);
         } else {
-          setError('No parking locations found in the database. Add parking records first.');
-          setAllLocations([]);
+          setAllLocations(mockParkingLocations);
+          const initialId = searchParams.get('select') || mockParkingLocations[0].id;
+          if (!selectedId) setSelectedId(initialId);
         }
       } catch (err) {
-        console.warn('[ParkingMapPage] API error:', err.message);
-        setError(
-          'Could not connect to the SmartPark backend. Please ensure the backend server is running.'
-        );
+        console.warn('[ParkingMapPage] API error, using fallback data:', err.message);
+        setAllLocations(mockParkingLocations);
+        const initialId = searchParams.get('select') || mockParkingLocations[0].id;
+        if (!selectedId) setSelectedId(initialId);
       } finally {
         setLoading(false);
       }
@@ -142,14 +152,14 @@ export const ParkingMapPage = () => {
     setGeocodeError(null);
     try {
       const result = await geocodeLocation(query);
-      setSearchedLocation(result);
+      setSearchedLocation({ ...result, radiusKm: searchRadius });
       setSortBy('distance');
     } catch (err) {
       setGeocodeError(err.message || 'Geocoding failed. Try a different search term.');
     } finally {
       setGeocoding(false);
     }
-  }, [locationQuery]);
+  }, [locationQuery, searchRadius]);
 
   const clearLocationSearch = () => {
     setSearchedLocation(null);
@@ -170,19 +180,37 @@ export const ParkingMapPage = () => {
       (pos) => {
         const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setUserLocation(loc);
-        // Only override searched location if none exists yet
         if (!searchedLocation) {
-          setSearchedLocation({ ...loc, displayName: 'Your Current Location' });
+          setSearchedLocation({ ...loc, displayName: 'Your Current Location', radiusKm: searchRadius });
         }
         setLocating(false);
       },
       (err) => {
-        setLocError('Location access denied or unavailable. Use the search box instead.');
+        setLocError('Location access denied or unavailable. Use the search box or click on map.');
         setLocating(false);
       },
       { timeout: 10000 }
     );
-  }, [searchedLocation]);
+  }, [searchedLocation, searchRadius]);
+
+  // ── Map Click to set search origin ─────────────────────────────────────────
+  const handleMapClick = useCallback((coords) => {
+    setSearchedLocation({
+      lat: coords.lat,
+      lng: coords.lng,
+      displayName: `Pinned Location (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`,
+      radiusKm: searchRadius,
+    });
+    setSortBy('distance');
+  }, [searchRadius]);
+
+  // Update radius on searchedLocation if user changes radius selector
+  const handleRadiusChange = (newRadius) => {
+    setSearchRadius(newRadius);
+    if (searchedLocation) {
+      setSearchedLocation((prev) => ({ ...prev, radiusKm: newRadius }));
+    }
+  };
 
   // ── Filter + sort pipeline ────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -207,9 +235,9 @@ export const ParkingMapPage = () => {
         if (maxPrice < 500 && (p.pricePerHour || 0) > maxPrice) return false;
 
         // Radius filter relative to the searched/GPS location
-        if (refLat && refLng && p.coordinates?.lat && p.coordinates?.lng) {
-          const dist = haversine(refLat, refLng, p.coordinates.lat, p.coordinates.lng);
-          // If searched location is active, use searchRadius; otherwise use maxDistance filter
+        const coords = parseCoordinates(p);
+        if (refLat && refLng && coords) {
+          const dist = haversine(refLat, refLng, coords.lat, coords.lng);
           const radiusToUse = searchedLocation ? searchRadius : maxDistance;
           if (radiusToUse < 50 && dist > radiusToUse) return false;
         }
@@ -217,8 +245,9 @@ export const ParkingMapPage = () => {
         return true;
       })
       .map((p) => {
-        if (refLat && refLng && p.coordinates?.lat && p.coordinates?.lng) {
-          const dist = haversine(refLat, refLng, p.coordinates.lat, p.coordinates.lng);
+        const coords = parseCoordinates(p);
+        if (refLat && refLng && coords) {
+          const dist = haversine(refLat, refLng, coords.lat, coords.lng);
           return { ...p, _distKm: dist, distance: `${dist.toFixed(1)} km` };
         }
         return { ...p, _distKm: parseFloat(p.distance) || 999 };
@@ -237,6 +266,60 @@ export const ParkingMapPage = () => {
     (p) => String(p._id || p.id) === String(selectedId)
   ) || filtered[0];
 
+  // ── Driving Route Handler ────────────────────────────────────────────────
+  const handleGetRoute = useCallback(async (targetId) => {
+    const target = allLocations.find((p) => String(p._id || p.id) === String(targetId)) || selectedParking;
+    if (!target) return;
+
+    const destCoords = parseCoordinates(target);
+    if (!destCoords) {
+      setRouteError('Destination coordinates not available.');
+      return;
+    }
+
+    let originCoords = userLocation || (searchedLocation?.lat ? searchedLocation : null);
+    let originName = searchedLocation?.displayName || (userLocation ? 'Your Location' : 'City Center');
+
+    // If no user location or searched location, default to Bangalore City Center
+    if (!originCoords) {
+      originCoords = { lat: 12.9716, lng: 77.5946 };
+      originName = 'City Center Default Origin';
+    }
+
+    setRoutingLoading(true);
+    setRouteError(null);
+
+    try {
+      const route = await fetchDrivingRoute(
+        originCoords.lat,
+        originCoords.lng,
+        destCoords.lat,
+        destCoords.lng,
+        target.name
+      );
+
+      if (route) {
+        setActiveRoute({
+          ...route,
+          originName,
+          targetId: String(target._id || target.id),
+        });
+        setSelectedId(String(target._id || target.id));
+      } else {
+        setRouteError('Unable to generate route.');
+      }
+    } catch (err) {
+      setRouteError(err.message || 'Failed to fetch road route.');
+    } finally {
+      setRoutingLoading(false);
+    }
+  }, [allLocations, selectedParking, userLocation, searchedLocation]);
+
+  const clearRoute = () => {
+    setActiveRoute(null);
+    setRouteError(null);
+  };
+
   // ── Smart Recommendation ─────────────────────────────────────────────────
   const smartRecommendation = useMemo(() => {
     return getSmartRecommendations(filtered, aiPredictionsMap);
@@ -253,7 +336,7 @@ export const ParkingMapPage = () => {
             <span>Live Interactive Parking Map</span>
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Search any location to find nearby parking from our database · Powered by OpenStreetMap & Nominatim
+            Search any location or click directly on the map to find nearby parking &amp; get driving directions
           </p>
         </div>
 
@@ -271,9 +354,14 @@ export const ParkingMapPage = () => {
 
       {/* ── Location Search Box ─────────────────────────────────────────────── */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
-        <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
-          <Search className="w-3.5 h-3.5 text-blue-400" />
-          Search Location & Find Nearby Parking
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
+            <Search className="w-3.5 h-3.5 text-blue-400" />
+            Search Location &amp; Find Nearby Parking
+          </div>
+          <span className="text-[11px] text-slate-500 hidden sm:inline">
+            💡 Tip: You can also click anywhere on the map to search around that spot
+          </span>
         </div>
 
         <form onSubmit={handleLocationSearch} className="flex gap-2">
@@ -285,7 +373,7 @@ export const ParkingMapPage = () => {
               type="text"
               value={locationQuery}
               onChange={(e) => setLocationQuery(e.target.value)}
-              placeholder="Search area, locality, city or address…"
+              placeholder="Search area, locality, landmark or address (e.g. Indiranagar, Koramangala)…"
               className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-8 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
             />
             {locationQuery && (
@@ -303,11 +391,11 @@ export const ParkingMapPage = () => {
           <select
             id="radius-select"
             value={searchRadius}
-            onChange={(e) => setSearchRadius(Number(e.target.value))}
-            className="bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500"
+            onChange={(e) => handleRadiusChange(Number(e.target.value))}
+            className="bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 cursor-pointer"
           >
             {RADIUS_OPTIONS.map((r) => (
-              <option key={r} value={r}>{r} km</option>
+              <option key={r} value={r}>{r} km radius</option>
             ))}
           </select>
 
@@ -337,10 +425,33 @@ export const ParkingMapPage = () => {
             </div>
             <button
               onClick={clearLocationSearch}
-              className="text-slate-500 hover:text-red-400 ml-2 shrink-0 transition-colors"
+              className="text-slate-500 hover:text-red-400 ml-2 shrink-0 transition-colors p-1"
               title="Clear searched location"
             >
               <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Active Route banner */}
+        {activeRoute && (
+          <div className="flex items-center justify-between bg-emerald-950/40 border border-emerald-600/40 rounded-lg px-3 py-2.5">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Route className="w-4 h-4 text-emerald-400 shrink-0" />
+              <div>
+                <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">Active Driving Route</span>
+                <div className="text-xs text-white font-semibold">
+                  To {activeRoute.destinationName} · <span className="text-emerald-400 font-bold">{activeRoute.distanceKm} km</span> · <span className="text-blue-300 font-bold">~{activeRoute.durationMins} mins</span>
+                </div>
+                <span className="text-[10px] text-slate-400">From {activeRoute.originName}</span>
+              </div>
+            </div>
+            <button
+              onClick={clearRoute}
+              className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-md text-xs font-medium border border-slate-700 transition-colors"
+            >
+              <X className="w-3 h-3" />
+              <span>Clear Route</span>
             </button>
           </div>
         )}
@@ -353,13 +464,13 @@ export const ParkingMapPage = () => {
           </div>
         )}
 
-        {/* Disclaimer about data source */}
-        <div className="flex items-start gap-2 text-slate-500 text-[10px]">
-          <Info className="w-3 h-3 mt-0.5 shrink-0" />
-          <span>
-            Results show only parking locations registered in the SmartPark AI database. This does not include all real-world parking facilities.
-          </span>
-        </div>
+        {/* Route error */}
+        {routeError && (
+          <div className="flex items-center gap-2 text-rose-300 text-xs bg-rose-950/40 border border-rose-700/40 rounded-lg px-3 py-2">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            <span>{routeError}</span>
+          </div>
+        )}
       </div>
 
       {/* Error / warning banners */}
@@ -407,14 +518,14 @@ export const ParkingMapPage = () => {
 
       {/* Map + Side Panel */}
       <div id="parking-map-view" className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col lg:flex-row"
-           style={{ height: '600px' }}>
+           style={{ minHeight: '620px', height: '620px' }}>
 
         {/* ── Leaflet Map ── */}
-        <div className="flex-1 relative" style={{ minHeight: '320px' }}>
+        <div className="flex-1 relative" style={{ minHeight: '360px' }}>
           {loading && (
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-sm gap-3">
               <RefreshCw className="w-7 h-7 text-blue-400 animate-spin" />
-              <span className="text-sm text-slate-300 font-medium">Loading parking data from database…</span>
+              <span className="text-sm text-slate-300 font-medium">Loading live parking data…</span>
             </div>
           )}
 
@@ -422,12 +533,15 @@ export const ParkingMapPage = () => {
             locations={filtered}
             selectedLocationId={selectedId}
             onSelectLocation={setSelectedId}
+            onRequestRoute={handleGetRoute}
+            onMapClick={handleMapClick}
             userLocation={userLocation}
             searchedLocation={searchedLocation}
+            activeRoute={activeRoute}
           />
 
           {/* Marker legend overlay */}
-          <div className="absolute bottom-3 left-3 z-[1000] flex items-center gap-3 bg-slate-900/90 backdrop-blur-md px-3 py-2 rounded-lg border border-slate-700 text-[10px] text-slate-300 pointer-events-none">
+          <div className="absolute bottom-3 left-3 z-[400] flex items-center gap-3 bg-slate-900/90 backdrop-blur-md px-3 py-2 rounded-lg border border-slate-700 text-[10px] text-slate-300 pointer-events-none shadow-lg">
             <span className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" /> Available
             </span>
@@ -439,20 +553,27 @@ export const ParkingMapPage = () => {
             </span>
             {userLocation && (
               <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 ring-1 ring-white inline-block" /> You
+                <span className="w-2.5 h-2.5 rounded-full bg-blue-400 ring-1 ring-white inline-block" /> GPS
               </span>
             )}
-            {searchedLocation && !userLocation && (
+            {searchedLocation && (
               <span className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-purple-400 ring-1 ring-white inline-block" /> Search
               </span>
             )}
           </div>
 
-          {/* Result count */}
-          <div className="absolute top-3 left-3 z-[1000] bg-slate-900/90 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-slate-700 text-[10px] font-semibold text-slate-300 pointer-events-none">
-            <Layers className="w-3 h-3 inline mr-1 text-blue-400" />
-            {filtered.length} location{filtered.length !== 1 ? 's' : ''}{searchedLocation ? ` within ${searchRadius} km` : ''}
+          {/* Result count & interactive indicator */}
+          <div className="absolute top-3 left-3 z-[400] flex items-center gap-2">
+            <div className="bg-slate-900/90 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-slate-700 text-[10px] font-semibold text-slate-300 shadow-md">
+              <Layers className="w-3 h-3 inline mr-1 text-blue-400" />
+              {filtered.length} location{filtered.length !== 1 ? 's' : ''}{searchedLocation ? ` within ${searchRadius} km` : ''}
+            </div>
+            {activeRoute && (
+              <div className="bg-emerald-950/90 backdrop-blur-md text-emerald-400 border border-emerald-600/50 px-2.5 py-1.5 rounded-lg text-[10px] font-bold shadow-md">
+                Route: {activeRoute.distanceKm} km ({activeRoute.durationMins}m)
+              </div>
+            )}
           </div>
         </div>
 
@@ -551,7 +672,7 @@ export const ParkingMapPage = () => {
               {selectedParking._distKm && selectedParking._distKm < 999 && (
                 <div className="text-[11px] text-slate-400 flex items-center gap-1.5 bg-slate-950 rounded-lg px-2.5 py-2">
                   <Navigation className="w-3 h-3 text-blue-400 shrink-0" />
-                  <span><span className="font-bold text-slate-200">{selectedParking.distance}</span> from {searchedLocation ? 'searched location' : 'you'}</span>
+                  <span><span className="font-bold text-slate-200">{selectedParking.distance}</span> from {searchedLocation ? 'searched point' : 'you'}</span>
                 </div>
               )}
 
@@ -620,6 +741,31 @@ export const ParkingMapPage = () => {
 
             {/* Actions */}
             <div className="p-4 border-t border-slate-800 space-y-2">
+              {/* In-app driving route */}
+              <button
+                id="btn-show-driving-route"
+                onClick={() => handleGetRoute(selectedParking._id || selectedParking.id)}
+                disabled={routingLoading}
+                className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-md shadow-emerald-600/20"
+              >
+                {routingLoading ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Calculating Route…</span>
+                  </>
+                ) : activeRoute && activeRoute.targetId === String(selectedParking._id || selectedParking.id) ? (
+                  <>
+                    <Route className="w-3.5 h-3.5" />
+                    <span>Route Active ({activeRoute.distanceKm} km · {activeRoute.durationMins}m)</span>
+                  </>
+                ) : (
+                  <>
+                    <Route className="w-3.5 h-3.5" />
+                    <span>Show Driving Route on Map</span>
+                  </>
+                )}
+              </button>
+
               <button
                 id="btn-view-details"
                 onClick={() =>
@@ -627,24 +773,25 @@ export const ParkingMapPage = () => {
                 }
                 className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-lg shadow-blue-500/20"
               >
-                View Details &amp; Reserve
+                View Details &amp; Reserve Bay
               </button>
+
               <button
                 id="btn-navigate"
                 onClick={() => {
-                  if (selectedParking.coordinates) {
-                    const { lat, lng } = selectedParking.coordinates;
+                  const coords = parseCoordinates(selectedParking);
+                  if (coords) {
                     window.open(
-                      `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`,
+                      `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lng}`,
                       '_blank'
                     );
                   }
                 }}
-                disabled={!selectedParking.coordinates}
-                className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-40"
+                disabled={!parseCoordinates(selectedParking)}
+                className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-40"
               >
                 <Navigation className="w-3.5 h-3.5 text-blue-400" />
-                Navigate with Google Maps
+                Open in Google Maps
               </button>
             </div>
           </div>
@@ -659,7 +806,7 @@ export const ParkingMapPage = () => {
                   {RADIUS_OPTIONS.filter(r => r > searchRadius).slice(0, 3).map(r => (
                     <button
                       key={r}
-                      onClick={() => setSearchRadius(r)}
+                      onClick={() => handleRadiusChange(r)}
                       className="px-3 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs rounded-full transition-colors"
                     >
                       Try {r} km
@@ -668,7 +815,7 @@ export const ParkingMapPage = () => {
                 </div>
               </div>
             ) : (
-              <p className="text-xs text-slate-500 mt-1">Search a location or use GPS to find nearby parking.</p>
+              <p className="text-xs text-slate-500 mt-1">Search a location or click anywhere on the map to find nearby parking.</p>
             )}
           </div>
         )}

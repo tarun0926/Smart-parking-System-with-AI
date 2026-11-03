@@ -4,7 +4,8 @@ import { MapPin, Navigation, Compass, Layers, CheckCircle2, AlertCircle, Info } 
 import StatusBadge from '../common/StatusBadge';
 
 export const InteractiveMap = ({ locations, selectedLocationId, onSelectLocation }) => {
-  const activeSpot = locations.find((l) => l.id === selectedLocationId) || locations[0];
+  const activeSpot = locations.find((l) => String(l._id || l.id) === String(selectedLocationId)) || locations[0];
+  const activeSpotId = activeSpot ? String(activeSpot._id || activeSpot.id) : null;
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col md:flex-row h-[600px]">
@@ -27,13 +28,14 @@ export const InteractiveMap = ({ locations, selectedLocationId, onSelectLocation
         {/* Simulated Map Markers Pin Container */}
         <div className="relative z-10 my-auto flex flex-wrap items-center justify-center gap-8 py-10">
           {locations.map((loc) => {
-            const isSelected = loc.id === activeSpot?.id;
+            const locId = String(loc._id || loc.id || '');
+            const isSelected = locId === activeSpotId;
             const isFull = loc.availableSlots === 0;
 
             return (
               <button
-                key={loc.id}
-                onClick={() => onSelectLocation && onSelectLocation(loc.id)}
+                key={locId || loc.name}
+                onClick={() => onSelectLocation && onSelectLocation(locId)}
                 className={`relative group/pin flex flex-col items-center transition-all ${
                   isSelected ? 'scale-110 z-20' : 'hover:scale-105 opacity-80 hover:opacity-100'
                 }`}

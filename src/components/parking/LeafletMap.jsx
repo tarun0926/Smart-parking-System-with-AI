@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -10,18 +11,39 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
 
+// ─── Helper: parse coordinates safely ─────────────────────────────────────────
+export function parseCoordinates(parking) {
+  if (!parking) return null;
+  const c = parking.coordinates;
+  if (!c) return null;
+  let lat = null;
+  let lng = null;
+  if (Array.isArray(c) && c.length >= 2) {
+    lat = Number(c[0]);
+    lng = Number(c[1]);
+  } else if (typeof c === 'object') {
+    lat = Number(c.lat ?? c.latitude);
+    lng = Number(c.lng ?? c.longitude);
+  }
+  if (lat != null && lng != null && !isNaN(lat) && !isNaN(lng) && (lat !== 0 || lng !== 0)) {
+    return { lat, lng };
+  }
+  return null;
+}
+
 // ─── Coloured SVG pin factory ────────────────────────────────────────────────
 const makeIcon = (color) => {
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 42" width="32" height="42">
       <defs>
-        <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+        <filter id="shadow-${color.replace('#', '')}" x="-20%" y="-20%" width="140%" height="140%">
           <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.5)"/>
         </filter>
       </defs>
       <path d="M16 0C7.163 0 0 7.163 0 16c0 9.94 14 26 16 26S32 25.94 32 16C32 7.163 24.837 0 16 0z"
-            fill="${color}" filter="url(#shadow)"/>
-      <circle cx="16" cy="16" r="6" fill="white" opacity="0.9"/>
+            fill="${color}" filter="url(#shadow-${color.replace('#', '')})"/>
+      <circle cx="16" cy="16" r="6" fill="white" opacity="0.95"/>
+      <text x="16" y="20" font-size="11" font-weight="bold" text-anchor="middle" fill="${color}">P</text>
     </svg>`;
   const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   return L.icon({ iconUrl: url, iconSize: [32, 42], iconAnchor: [16, 42], popupAnchor: [0, -44] });
@@ -49,12 +71,13 @@ function buildPopupHTML(parking, parkingId) {
   return `
     <div style="
       font-family: 'Inter', system-ui, sans-serif;
-      min-width: 220px;
-      max-width: 260px;
+      min-width: 230px;
+      max-width: 270px;
       background: #0f172a;
       border-radius: 12px;
       overflow: hidden;
       border: 1px solid #1e293b;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
     ">
       <div style="background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%); padding: 12px 14px 10px;">
         <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:8px;">
@@ -93,11 +116,11 @@ function buildPopupHTML(parking, parkingId) {
         </div>
 
         <div style="display:flex; gap:6px;">
-          <a href="/parking/${parkingId}" style="flex:1; display:block; text-align:center; background:linear-gradient(135deg,#2563eb,#1d4ed8); color:#fff; font-size:11px; font-weight:700; padding:8px 0; border-radius:8px; text-decoration:none;">
+          <button data-action="details" data-id="${parkingId}" style="flex:1; display:block; text-align:center; background:linear-gradient(135deg,#2563eb,#1d4ed8); color:#fff; font-size:11px; font-weight:700; padding:8px 0; border-radius:8px; border:none; cursor:pointer;">
             View Details
-          </a>
-          <button onclick="(function(){var p=window.__spLocations&&window.__spLocations['${parkingId}'];if(p&&p.coordinates){window.open('https://www.google.com/maps/dir/?api=1&destination='+p.coordinates.lat+','+p.coordinates.lng,'_blank');}})();" style="padding:8px 10px; background:#1e293b; border:1px solid #334155; border-radius:8px; color:#94a3b8; font-size:11px; font-weight:600; cursor:pointer; white-space:nowrap;">
-            🧭 Navigate
+          </button>
+          <button data-action="route" data-id="${parkingId}" style="padding:8px 10px; background:#1e293b; border:1px solid #334155; border-radius:8px; color:#60a5fa; font-size:11px; font-weight:600; cursor:pointer; white-space:nowrap;">
+            🧭 Route
           </button>
         </div>
       </div>
@@ -109,10 +132,13 @@ export const LeafletMap = ({
   locations = [],
   selectedLocationId,
   onSelectLocation,
+  onRequestRoute,
+  onMapClick,
   userLocation,
   searchedLocation,
   activeRoute = null,
 }) => {
+  const navigate = useNavigate();
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markersRef = useRef({});
@@ -126,19 +152,39 @@ export const LeafletMap = ({
   const initialFitDone = useRef(false);
   const [mapReady, setMapReady] = useState(false);
 
-  // Expose locations to inline popup onclick handlers
+  // Expose global callback for popup clicks
   useEffect(() => {
-    const dict = {};
-    locations.forEach((p) => {
-      dict[p._id || p.id] = p;
-    });
-    window.__spLocations = dict;
-    return () => { delete window.__spLocations; };
-  }, [locations]);
+    const handlePopupAction = (e) => {
+      const btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      const action = btn.getAttribute('data-action');
+      const id = btn.getAttribute('data-id');
+      if (action === 'details' && id) {
+        navigate(`/parking/${id}`);
+      } else if (action === 'route' && id && onRequestRoute) {
+        onRequestRoute(id);
+      }
+    };
+
+    const container = mapRef.current;
+    if (container) {
+      container.addEventListener('click', handlePopupAction);
+    }
+    return () => {
+      if (container) {
+        container.removeEventListener('click', handlePopupAction);
+      }
+    };
+  }, [navigate, onRequestRoute]);
 
   // ── Initialise map once ──────────────────────────────────────────────────
   useEffect(() => {
     if (mapInstanceRef.current || !mapRef.current) return;
+
+    // Safety: delete _leaflet_id if left over from previous mount to prevent "Map container is already initialized"
+    if (mapRef.current._leaflet_id) {
+      delete mapRef.current._leaflet_id;
+    }
 
     const map = L.map(mapRef.current, {
       center: [12.9716, 77.5946],
@@ -149,19 +195,20 @@ export const LeafletMap = ({
 
     L.control.zoom({ position: 'topright' }).addTo(map);
 
-    // Dark tile layer (Stadia free tier)
+    // CartoDB Dark Matter tile layer (100% Free, No API Key required, fast CDN)
     const darkTile = L.tileLayer(
-      'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png',
+      'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
       {
         attribution:
-          '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
         maxZoom: 20,
       }
     );
 
-    // Standard OSM (fallback)
+    // Standard OSM (fallback / alternative)
     const osmTile = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19,
     });
 
@@ -171,16 +218,54 @@ export const LeafletMap = ({
       .layers({ '🌙 Dark': darkTile, '🗺️ Standard': osmTile }, {}, { position: 'topright', collapsed: true })
       .addTo(map);
 
+    // Map click handler (click on empty map spot)
+    map.on('click', (e) => {
+      if (onMapClick) {
+        onMapClick({ lat: e.latlng.lat, lng: e.latlng.lng });
+      }
+    });
+
     mapInstanceRef.current = map;
     setMapReady(true);
 
+    // Invalidate size after layout completes (fixes blank/gray tiles on initial load or flex layout)
+    const timer1 = setTimeout(() => {
+      map.invalidateSize();
+    }, 200);
+    const timer2 = setTimeout(() => {
+      map.invalidateSize();
+    }, 600);
+
+    // ResizeObserver to handle container size changes cleanly
+    let resizeObserver = null;
+    if (window.ResizeObserver && mapRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.invalidateSize();
+        }
+      });
+      resizeObserver.observe(mapRef.current);
+    }
+
     return () => {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
+      if (mapRef.current) {
+        delete mapRef.current._leaflet_id;
+      }
       markersRef.current = {};
       userMarkerRef.current = null;
+      searchedMarkerRef.current = null;
+      searchedCircleRef.current = null;
+      routeLayerRef.current = null;
+      routeOutlineRef.current = null;
     };
   }, []);
 
@@ -193,11 +278,15 @@ export const LeafletMap = ({
     Object.values(markersRef.current).forEach((m) => map.removeLayer(m));
     markersRef.current = {};
 
-    if (!locations.length) return;
+    if (!locations || !locations.length) return;
+
+    const validPoints = [];
 
     locations.forEach((parking) => {
-      const coords = parking.coordinates;
-      if (!coords?.lat || !coords?.lng) return;
+      const coords = parseCoordinates(parking);
+      if (!coords) return;
+
+      validPoints.push([coords.lat, coords.lng]);
 
       const parkingId = String(parking._id || parking.id || '');
       const isFull = parking.availableSlots === 0;
@@ -214,17 +303,12 @@ export const LeafletMap = ({
       markersRef.current[parkingId] = marker;
     });
 
-    // Fit map to all markers the first time only
-    if (!initialFitDone.current) {
-      const validCoords = locations
-        .filter((p) => p.coordinates?.lat && p.coordinates?.lng)
-        .map((p) => [p.coordinates.lat, p.coordinates.lng]);
-      if (validCoords.length > 0) {
-        map.fitBounds(L.latLngBounds(validCoords), { padding: [60, 60], maxZoom: 15 });
-      }
+    // Fit map to all markers the first time only if no searchedLocation exists
+    if (!initialFitDone.current && validPoints.length > 0 && !searchedLocation?.lat) {
+      map.fitBounds(L.latLngBounds(validPoints), { padding: [60, 60], maxZoom: 15 });
       initialFitDone.current = true;
     }
-  }, [locations, mapReady]);
+  }, [locations, mapReady, selectedLocationId]);
 
   // ── Highlight selected marker & fly to it ───────────────────────────────
   useEffect(() => {
@@ -240,15 +324,24 @@ export const LeafletMap = ({
       if (!m) return;
       const isFull = p.availableSlots === 0;
       m.setIcon(pid === selectedStr ? ICONS.selected : isFull ? ICONS.full : ICONS.available);
+      if (pid === selectedStr) {
+        m.setZIndexOffset(1000);
+      } else {
+        m.setZIndexOffset(0);
+      }
     });
 
     const marker = markersRef.current[selectedStr];
     const parking = locations.find((p) => String(p._id || p.id) === selectedStr);
-    if (parking?.coordinates) {
-      map.flyTo([parking.coordinates.lat, parking.coordinates.lng], 16, { duration: 1 });
+    const coords = parseCoordinates(parking);
+
+    if (coords) {
+      map.flyTo([coords.lat, coords.lng], Math.max(map.getZoom(), 15), { duration: 1 });
     }
     if (marker) {
-      setTimeout(() => marker.openPopup(), 900);
+      setTimeout(() => {
+        if (mapInstanceRef.current) marker.openPopup();
+      }, 700);
     }
   }, [selectedLocationId, mapReady, locations]);
 
@@ -264,20 +357,19 @@ export const LeafletMap = ({
     } else {
       const pulse = L.circleMarker([lat, lng], {
         radius: 10,
-        fillColor: '#f59e0b',
+        fillColor: '#3b82f6',
         fillOpacity: 0.9,
         color: '#ffffff',
         weight: 3,
       })
         .addTo(map)
         .bindPopup(
-          '<div style="font-family:Inter,sans-serif;font-weight:700;color:#0f172a;">📍 Your GPS Location</div>'
+          '<div style="font-family:Inter,sans-serif;font-weight:700;color:#0f172a;padding:4px 6px;">📍 Your Current Location</div>'
         );
 
       userMarkerRef.current = pulse;
-      // Only fly to GPS if no searched location is active
       if (!searchedLocation?.lat) {
-        map.flyTo([lat, lng], 14, { duration: 1.5 });
+        map.flyTo([lat, lng], 14, { duration: 1.2 });
       }
     }
   }, [userLocation, mapReady]);
@@ -288,25 +380,50 @@ export const LeafletMap = ({
     if (!map || !mapReady) return;
 
     // Remove previous searched marker and circle
-    if (searchedMarkerRef.current) { map.removeLayer(searchedMarkerRef.current); searchedMarkerRef.current = null; }
-    if (searchedCircleRef.current) { map.removeLayer(searchedCircleRef.current); searchedCircleRef.current = null; }
+    if (searchedMarkerRef.current) {
+      map.removeLayer(searchedMarkerRef.current);
+      searchedMarkerRef.current = null;
+    }
+    if (searchedCircleRef.current) {
+      map.removeLayer(searchedCircleRef.current);
+      searchedCircleRef.current = null;
+    }
 
-    if (!searchedLocation?.lat) return;
+    if (!searchedLocation?.lat || !searchedLocation?.lng) return;
 
-    const { lat, lng, displayName } = searchedLocation;
+    const { lat, lng, displayName, radiusKm } = searchedLocation;
 
-    const marker = L.marker([lat, lng], { icon: ICONS.searched, title: displayName || 'Searched Location' })
+    const marker = L.marker([lat, lng], {
+      icon: ICONS.searched,
+      title: displayName || 'Searched Location',
+      zIndexOffset: 900,
+    })
       .addTo(map)
-      .bindPopup(`<div style="font-family:Inter,sans-serif;font-weight:700;color:#f1f5f9;background:#0f172a;padding:4px 0;">🔍 ${displayName || 'Searched Location'}</div>`);
+      .bindPopup(
+        `<div style="font-family:Inter,sans-serif;font-weight:700;color:#f1f5f9;background:#0f172a;padding:6px 8px;border-radius:6px;">🔍 ${
+          displayName || 'Searched Location'
+        }</div>`
+      );
 
     searchedMarkerRef.current = marker;
 
-    // Fly map to the searched location
+    if (radiusKm) {
+      const circle = L.circle([lat, lng], {
+        radius: radiusKm * 1000,
+        color: '#a855f7',
+        fillColor: '#a855f7',
+        fillOpacity: 0.08,
+        weight: 1.5,
+        dashArray: '4, 4',
+      }).addTo(map);
+      searchedCircleRef.current = circle;
+    }
+
+    // Fly map to searched point
     map.flyTo([lat, lng], 14, { duration: 1.2 });
-    initialFitDone.current = false; // Allow re-fit after new location search
   }, [searchedLocation, mapReady]);
 
-  // ── Real Driving Route Rendering ───────────────────────────────────────────
+  // ── Driving Route Rendering ───────────────────────────────────────────────
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || !mapReady) return;
@@ -333,16 +450,16 @@ export const LeafletMap = ({
       return;
     }
 
-    // 1. Draw glowing outer polyline casing
+    // Outer glow casing
     const outline = L.polyline(activeRoute.coordinates, {
       color: '#1d4ed8',
       weight: 8,
-      opacity: 0.65,
+      opacity: 0.7,
       lineCap: 'round',
       lineJoin: 'round',
     }).addTo(map);
 
-    // 2. Draw animated/styled inner driving line
+    // Inner animated dashed line
     const innerLine = L.polyline(activeRoute.coordinates, {
       color: '#60a5fa',
       weight: 4,
@@ -355,7 +472,7 @@ export const LeafletMap = ({
     routeOutlineRef.current = outline;
     routeLayerRef.current = innerLine;
 
-    // 3. Mark Start Origin
+    // Route endpoints
     const startPt = activeRoute.coordinates[0];
     const endPt = activeRoute.coordinates[activeRoute.coordinates.length - 1];
 
@@ -368,10 +485,11 @@ export const LeafletMap = ({
     })
       .addTo(map)
       .bindPopup(
-        `<div style="font-family:Inter,sans-serif;font-size:11px;font-weight:700;color:#0f172a;padding:2px;">📍 Starting Location</div>`
+        `<div style="font-family:Inter,sans-serif;font-size:11px;font-weight:700;color:#0f172a;padding:2px;">📍 Start: ${
+          activeRoute.originName || 'Origin'
+        }</div>`
       );
 
-    // 4. Mark Destination Parking
     const endMarker = L.circleMarker(endPt, {
       radius: 10,
       fillColor: '#3b82f6',
@@ -382,14 +500,14 @@ export const LeafletMap = ({
       .addTo(map)
       .bindPopup(
         `<div style="font-family:Inter,sans-serif;font-size:11px;font-weight:700;color:#0f172a;padding:2px;">🅿️ ${
-          activeRoute.destinationName || 'Destination Parking'
+          activeRoute.destinationName || 'Destination'
         } (${activeRoute.distanceKm} km · ~${activeRoute.durationMins}m)</div>`
       );
 
     routeStartMarkerRef.current = startMarker;
     routeEndMarkerRef.current = endMarker;
 
-    // 5. Fit map bounds to view the entire journey
+    // Fit map to view whole route
     const routeBounds = L.latLngBounds(activeRoute.coordinates);
     map.fitBounds(routeBounds, { padding: [60, 60], maxZoom: 16 });
   }, [activeRoute, mapReady]);
@@ -398,7 +516,8 @@ export const LeafletMap = ({
     <div
       ref={mapRef}
       id="leaflet-parking-map"
-      style={{ width: '100%', height: '100%', minHeight: '400px', borderRadius: '0' }}
+      className="w-full h-full relative"
+      style={{ width: '100%', height: '100%', minHeight: '380px', zIndex: 1 }}
     />
   );
 };

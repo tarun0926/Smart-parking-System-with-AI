@@ -27,9 +27,13 @@ app = FastAPI(
 )
 
 # Enable CORS for frontend and MERN backend integration
+# Read allowed origins from env (comma-separated), defaulting to all for dev
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
+_allowed_origins = [o.strip() for o in _raw_origins.split(",")] if _raw_origins != "*" else ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
